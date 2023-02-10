@@ -1,13 +1,17 @@
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.UI;
 
 public class PlayerRigidBody : MonoBehaviour
 {
     Rigidbody rb;
-    public GameObject mainCamera;
     public Animator animator;
     Vector3 moveDirection;
+
+    [Header("Main Camera:")]
+    public GameObject mainCamera;
+    public Transform cameraHolder;
 
     [Header("Ground Check:")]
     public float playerHeight;
@@ -21,9 +25,7 @@ public class PlayerRigidBody : MonoBehaviour
     public float currentSpeed;
     public float walkSpeed;
     public float sprintSpeed;
-    //public bool isWalking = false;
     public bool isRunning = false;
-    //public bool isBackwards = false;
     public float backwardRunSpeed;
 
     [Header("Slope Handling:")]
@@ -47,6 +49,19 @@ public class PlayerRigidBody : MonoBehaviour
 
     [Header("Sliding:")]
     public float slideSpeed;
+    public bool isSilding = false;
+
+    [Header("Stamina:")]
+    public GameObject staminaSlider;
+    public Slider staminaBar;
+    public float currentStamina;
+    public float maxStamina;
+    public float negativeStamina;
+    private WaitForSeconds regenTick = new WaitForSeconds(0.1f);
+    private Coroutine regen;
+
+    [Header("Stamina Flash:")]
+    public Image staminaFlash;
 
     [Header("Key Count:")]
     public int keyCount;
@@ -62,6 +77,9 @@ public class PlayerRigidBody : MonoBehaviour
         {
             mainCamera = GameObject.FindGameObjectWithTag("MainCamera");
         }
+
+        currentStamina = maxStamina; // Set current stamina to full 
+        staminaBar.value = currentStamina; // Set bar to player stamina which is max stamina
     }
 
     private void Update()
@@ -73,6 +91,7 @@ public class PlayerRigidBody : MonoBehaviour
         isGrounded = Physics.CheckSphere(groundPt.position, 0.5f, groundLayer);
 
         // Upright Movement 
+
         // Walking forward 
         if (Input.GetKey(KeyCode.W))
         {
@@ -91,7 +110,6 @@ public class PlayerRigidBody : MonoBehaviour
         if (Input.GetKey(KeyCode.W) && Input.GetKey(KeyCode.LeftShift))
         {
             isRunning = true;
-            //isWalking = false;
             currentSpeed = sprintSpeed;
             animator.SetBool("isBackward", false);
             animator.SetBool("isWalking", false);
@@ -105,15 +123,14 @@ public class PlayerRigidBody : MonoBehaviour
         }
         else if (Input.GetKey(KeyCode.W) && !Input.GetKey(KeyCode.LeftShift))
         {
-            //isRunning = false;
-            //currentSpeed = walkSpeed;
+            isRunning = false;
             animator.SetBool("isRunning", false);
             animator.SetBool("isWalking", true);
         }
         // Ensure holding shift after letting go of W key does not continue the running forward animation
         else if (Input.GetKey(KeyCode.LeftShift))
         {
-            //isRunning = false;
+            isRunning = false;
             animator.SetBool("isRunning", false);
             animator.SetBool("isIdle", true);
         }
@@ -121,7 +138,6 @@ public class PlayerRigidBody : MonoBehaviour
         // Walking Backward Animation
         if (Input.GetKey(KeyCode.S))
         {
-            //isWalking = true;
             animator.SetBool("isIdle", false);
             currentSpeed = walkSpeed;
             animator.SetBool("isNegative", true);
@@ -135,9 +151,6 @@ public class PlayerRigidBody : MonoBehaviour
         // Running Backward Animation 
         if (Input.GetKey(KeyCode.S) && Input.GetKey(KeyCode.LeftShift))
         {
-            //isRunning = false;
-            //isBackwards = true;
-            //isWalking = false;
             animator.SetBool("isRunning", false);
             animator.SetBool("isNegative", false);
             currentSpeed = backwardRunSpeed;
@@ -172,6 +185,7 @@ public class PlayerRigidBody : MonoBehaviour
         {
             animator.SetBool("isRight", false);
         }
+
         // Left Strafe 
         if (Input.GetKey(KeyCode.A))
         {
@@ -186,11 +200,13 @@ public class PlayerRigidBody : MonoBehaviour
         // Sliding 
         if (isRunning && Input.GetKey(KeyCode.C))
         {
+            isSilding = true;
             animator.SetBool("isSliding", true);
             rb.AddForce(transform.forward * slideSpeed, ForceMode.VelocityChange);
         }
         else
         {
+            isSilding = false;
             animator.SetBool("isSliding", false);
         }
 
@@ -228,6 +244,7 @@ public class PlayerRigidBody : MonoBehaviour
         {
             isJumping = false;
         }
+
         if (isRunning && jumpKeyPressed)
         {
             animator.SetBool("isJumping", true);
@@ -298,6 +315,87 @@ public class PlayerRigidBody : MonoBehaviour
             animator.SetBool("isCrouchRight", false);
             animator.SetBool("isCrouched", true);
         }
+
+        // Camera Move when Sliding 
+        if (isSilding)
+        {
+            cameraHolder.localPosition = new Vector3(0.4f, 0.5f, 0.825f);
+        }
+        else if (!isSilding)
+        {
+            cameraHolder.localPosition = new Vector3(0, 1.8f, 0.5f);
+        }
+
+        // Camera Move when Crouched
+        if (isCrouched)
+        {
+            cameraHolder.localPosition = new Vector3(0.25f, 1.2f, 0.5f);
+        }
+
+        // Stamina 
+        if (isRunning)
+        {
+            staminaSlider.SetActive(true);
+            UseStamina(negativeStamina);
+            if (staminaBar.value < 50)
+            {
+                staminaFlash.color = ChangeColor();
+            }
+
+            if (staminaBar.value < 10)
+            {
+                currentSpeed = walkSpeed;
+                animator.SetBool("isRunning", false);
+                animator.SetBool("isWalking", true);
+            }
+            else if (isRunning && staminaBar.value > 15)
+            {
+                animator.SetBool("isRunning", true);
+                currentSpeed = sprintSpeed;
+            }
+        }
+        else if (!isRunning)
+        {
+            if (staminaBar.value > 75)
+            {
+                staminaSlider.SetActive(false);
+            }
+        }
+        staminaBar.value = currentStamina;
+    }
+
+    void UseStamina(float amount)
+    {
+        if (currentStamina - amount >= 0)
+        {
+            currentStamina -= amount * Time.deltaTime;
+            staminaBar.value = currentStamina;
+
+            // If we are already regenerating stamina 
+            if (regen != null)
+            {
+                StopCoroutine(regen);
+            }
+            regen = StartCoroutine(RegenerateStamina());
+        }
+    }
+
+    private IEnumerator RegenerateStamina()
+    {
+        yield return new WaitForSeconds(2);
+        while (currentStamina < maxStamina)
+        {
+            currentStamina += maxStamina / 100;
+            staminaBar.value = currentStamina;
+            staminaFlash.color = Color.white;
+            yield return regenTick;
+        }
+        regen = null;
+    }
+
+    public Color ChangeColor()
+    {
+        return Color.Lerp(a: Color.white, b: Color.red, t: Mathf.Sin(Time.time * 8));
     }
 
     private void FixedUpdate()
@@ -335,8 +433,11 @@ public class PlayerRigidBody : MonoBehaviour
     {
         if (other.tag == "Key")
         {
-            keyCount += 1;
-            Destroy(other.gameObject);
+            if (Input.GetKeyDown(KeyCode.G))
+            {
+                keyCount += 1;
+                Destroy(other.gameObject);
+            }
         }
     }
 }
