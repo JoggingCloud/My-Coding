@@ -1,172 +1,286 @@
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.UI;
 
-public class PlayerMovement : MonoBehaviour
+public class PlayerRigidBody : MonoBehaviour
 {
-    public CharacterController controller;
+    Rigidbody rb;
+    public Animator animator;
+    Vector3 moveDirection;
 
-    public float speed = 0f;
+    [Header("Main Camera:")]
+    public GameObject mainCamera;
+    public Transform cameraHolder;
 
-    [Header("Upright Movement:")]
-    public float runSpeed = 0f;
-    public float gravity = -9.81f;
-    public float jumpHeight = 0f;
-    public float normalHeight;
-    public Vector3 yNormalCenterHeight;
-
-    [Header("Crouch Movement:")]
-    public float crouchSpeed = 0f;
-    public float crouchHeight;
-    public Vector3 yCrouchCenterHeight;
-    public bool isCrouched = false;
-
-    [Header("Ground Detection:")]
-    // Access to obstacles that has this layer selected in the inspector 
-    public Transform groundCheck;
-
-    // Radius of sphere that is used to check the ground distance 
-    public float groundDistance = 0.4f;
-
-    // Control what objects the sphere should check for 
-    public LayerMask groundMask;
-
-    // Stores current velocity
-    Vector3 velocity;
-
-    // If grounded or not 
+    [Header("Ground Check:")]
+    public float playerHeight;
     public bool isGrounded;
+    public LayerMask groundLayer;
 
-    Animator animator;
 
-    [Header("Sound Effects:")]
+    [Header("Movement:")]
+    float moveForward;
+    float moveSide;
+    public float currentSpeed;
+    public float walkSpeed;
+    public float sprintSpeed;
+    public bool isRunning = false;
+    public float backwardRunSpeed;
 
-    public AudioSource runningAudioSource;
-    public bool isRunning;
+    [Header("Slope Handling:")]
+    public float maxSlopeAngle;
+    private RaycastHit slopeHit;
+    public bool exitingSlope;
+
+    [Header("Jumping:")]
+    public Transform groundPt;
+    public bool jumpKeyPressed;
+    public float jumpForce = 2f;
+    public float newGravity = -9.81f;
+    public float gravityMultiplier = 2f;
+    public bool isJumping = false;
+
+    [Header("Crouch Movement")]
+    public float crouchYScale;
+    public float startYScale;
+    public bool isCrouched = false;
+    public float crouchSpeed;
+
+    [Header("Sliding:")]
+    public float slideSpeed;
+    public bool isSilding = false;
+
+    [Header("Stamina:")]
+    public GameObject staminaSlider;
+    public Slider staminaBar;
+    public float currentStamina;
+    public float maxStamina;
+    public float negativeStamina;
+    private WaitForSeconds regenTick = new WaitForSeconds(0.1f);
+    private Coroutine regen;
+
+    [Header("Stamina Flash:")]
+    public Image staminaFlash;
+
+    [Header("Key Count:")]
+    public int keyCount;
 
     private void Start()
     {
-        animator = GetComponent<Animator>();
-        runningAudioSource = GetComponent<AudioSource>();    
+        rb = GetComponent<Rigidbody>();
+        startYScale = transform.localScale.y;
+        currentSpeed = walkSpeed;
+
+        // Gets reference to main camera 
+        if (mainCamera == null)
+        {
+            mainCamera = GameObject.FindGameObjectWithTag("MainCamera");
+        }
+
+        currentStamina = maxStamina; // Set current stamina to full 
+        staminaBar.value = currentStamina; // Set bar to player stamina which is max stamina
     }
 
     private void Update()
     {
-        // Creates a tiny invisible sphere 
-        // Checking the position and distance the player is from the ground if player is falling and or currently on the ground 
-        isGrounded = Physics.CheckSphere(groundCheck.position, groundDistance, groundMask);
+        moveForward = Input.GetAxis("Vertical") * currentSpeed;
+        moveSide = Input.GetAxis("Horizontal") * currentSpeed;
+        jumpKeyPressed = Input.GetButtonDown("Jump");
 
-        // If on the ground and the velocity is less than 0 then the velocity is reset. Set at -2f to ensure that the player is on the ground
-        if (isGrounded && velocity.y < 0)
+        isGrounded = Physics.CheckSphere(groundPt.position, 0.5f, groundLayer);
+
+        // Upright Movement 
+
+        // Walking forward 
+        if (Input.GetKey(KeyCode.W))
         {
-            velocity.y = -2f;
-            animator.SetBool("isGrounded", true);
+            //isWalking = true;
+            animator.SetBool("isIdle", false);
+            currentSpeed = walkSpeed;
+            animator.SetBool("isWalking", true);
+        }
+        else if (!Input.GetKey(KeyCode.W))
+        {
+            animator.SetBool("isWalking", false);
+            animator.SetBool("isIdle", true);
         }
 
-        // Gets the horizontal axis 
-        float x = Input.GetAxis("Horizontal");
-
-        // Gets vertical axis  
-        float z = Input.GetAxis("Vertical");
-
-        // player movement which takes the direction the player is moving based on where the player is facing
-        Vector3 move = transform.right * x + transform.forward * z;
-        if (isRunning)
+        // Running forward
+        if (Input.GetKey(KeyCode.W) && Input.GetKey(KeyCode.LeftShift))
         {
-            runningAudioSource.Play();
-        }
-        
-        // Running Forward Animation 
-        if (Input.GetKey(KeyCode.W) && !isCrouched)
-        {
-            animator.SetBool("isRunning", true);
             isRunning = true;
-            Debug.Log("sound playing");
+            currentSpeed = sprintSpeed;
+            animator.SetBool("isBackward", false);
+            animator.SetBool("isWalking", false);
+            animator.SetBool("isRunning", true);
         }
-        else
+        else if (!Input.GetKey(KeyCode.W) && !Input.GetKey(KeyCode.LeftShift))
         {
+            isRunning = false;
+            currentSpeed = walkSpeed;
+            animator.SetBool("isRunning", false);
+        }
+        else if (Input.GetKey(KeyCode.W) && !Input.GetKey(KeyCode.LeftShift))
+        {
+            isRunning = false;
+            animator.SetBool("isRunning", false);
+            animator.SetBool("isWalking", true);
+        }
+        // Ensure holding shift after letting go of W key does not continue the running forward animation
+        else if (Input.GetKey(KeyCode.LeftShift))
+        {
+            isRunning = false;
             animator.SetBool("isRunning", false);
             animator.SetBool("isIdle", true);
-            //runningAudioSource.Play();
-            Debug.Log("Sound is suppose to playing");
         }
 
-        // Running Backward Animation
+        // Walking Backward Animation
         if (Input.GetKey(KeyCode.S))
         {
+            animator.SetBool("isIdle", false);
+            currentSpeed = walkSpeed;
             animator.SetBool("isNegative", true);
         }
-        else
+        else if (!Input.GetKey(KeyCode.S))
         {
             animator.SetBool("isNegative", false);
             animator.SetBool("isIdle", true);
         }
 
-        // Left Strafe Running
-        if (Input.GetKey(KeyCode.A))
+        // Running Backward Animation 
+        if (Input.GetKey(KeyCode.S) && Input.GetKey(KeyCode.LeftShift))
         {
-            animator.SetBool("isLeft", true);
+            animator.SetBool("isRunning", false);
+            animator.SetBool("isNegative", false);
+            currentSpeed = backwardRunSpeed;
+            animator.SetBool("isBackward", true);
         }
-        else
+        else if (!Input.GetKey(KeyCode.S) && !Input.GetKey(KeyCode.LeftShift))
         {
-            animator.SetBool("isLeft", false);
+            currentSpeed = walkSpeed;
+            animator.SetBool("isBackward", false);
+        }
+        else if (Input.GetKey(KeyCode.S) && !Input.GetKey(KeyCode.LeftShift))
+        {
+            currentSpeed = walkSpeed;
+            animator.SetBool("isBackward", false);
+            animator.SetBool("isNegative", true);
+        }
+        // Ensure holding shift after letting go of S key does not continue the running backward animation
+        else if (Input.GetKey(KeyCode.LeftShift))
+        {
+            //isRunning = false;
+            animator.SetBool("isBackward", false);
             animator.SetBool("isIdle", true);
         }
 
-        // Right Strafe Running
+        // Right Strafe
         if (Input.GetKey(KeyCode.D))
         {
+            currentSpeed = walkSpeed;
             animator.SetBool("isRight", true);
+        }
+        else if (!Input.GetKey(KeyCode.D))
+        {
+            animator.SetBool("isRight", false);
+        }
+
+        // Left Strafe 
+        if (Input.GetKey(KeyCode.A))
+        {
+            currentSpeed = walkSpeed;
+            animator.SetBool("isLeft", true);
+        }
+        else if (!Input.GetKey(KeyCode.A))
+        {
+            animator.SetBool("isLeft", false);
+        }
+
+        // Sliding 
+        if (isRunning && Input.GetKey(KeyCode.C))
+        {
+            isSilding = true;
+            animator.SetBool("isSliding", true);
+            rb.AddForce(transform.forward * slideSpeed, ForceMode.VelocityChange);
         }
         else
         {
-            animator.SetBool("isRight", false);
-            animator.SetBool("isIdle", true);
+            isSilding = false;
+            animator.SetBool("isSliding", false);
         }
-        
-        // player movement speed over time per frame rate 
-        controller.Move(move * speed * Time.deltaTime);
 
-        // If player presses the jump button and is on the ground then the player will jump in the y direction and come down to the ground because of gravity
-        // Jumping and Falling Animation
-        if (Input.GetKeyDown(KeyCode.Space) && isGrounded)
+        // On Slope
+        if (OnSlope() && !exitingSlope)
+        {
+            rb.AddForce(GetSlopeMoveDirection() * currentSpeed * 20f, ForceMode.Force);
+            // Keeps player constantly on the slope
+            if (rb.velocity.y > 0)
+            {
+                rb.AddForce(Vector3.down * 80f, ForceMode.Force);
+            }
+            
+            if (rb.velocity.magnitude > currentSpeed)
+            {
+                rb.velocity = rb.velocity.normalized * currentSpeed;
+            }
+        }
+        rb.useGravity = !OnSlope();
+
+        //Makes Character Jump
+        if (isGrounded && jumpKeyPressed)
+        {
+            isJumping = true;
+            exitingSlope = true;
+            rb.AddForce(transform.up * jumpForce * rb.mass, ForceMode.Impulse);
+            animator.SetBool("isJumped", true);
+            Debug.Log("Player is jumping");
+        }
+        else if (isGrounded || !jumpKeyPressed)
+        {
+            animator.SetBool("isJumped", false);
+        }
+        else if (isRunning && jumpKeyPressed)
+        {
+            isJumping = false;
+        }
+
+        if (isRunning && jumpKeyPressed)
         {
             animator.SetBool("isJumping", true);
-            velocity.y = Mathf.Sqrt(jumpHeight * -2f * gravity);
         }
-        else if (isGrounded && velocity.y < 0)
+        else if (isRunning && !jumpKeyPressed)
         {
             animator.SetBool("isJumping", false);
-            animator.SetBool("isGrounded", true); 
         }
 
-        // Crouching Inputs
-        if (Input.GetKeyDown(KeyCode.LeftControl) && isGrounded)
+        // Crouch Movement
+        if (isGrounded && Input.GetKeyDown(KeyCode.LeftControl))
         {
+            transform.localScale = new Vector3(transform.localScale.x, crouchYScale, transform.localScale.z);
+            rb.AddForce(Vector3.down * 5f, ForceMode.Impulse);
             isCrouched = true;
-            speed = crouchSpeed;
-            controller.height = crouchHeight;
-            controller.center = yCrouchCenterHeight;
+            currentSpeed = crouchSpeed;
             animator.SetBool("isCrouched", true);
         }
         else if (Input.GetKeyUp(KeyCode.LeftControl))
         {
+            transform.localScale = new Vector3(transform.localScale.x, startYScale, transform.localScale.z);
             isCrouched = false;
-            speed = runSpeed;
-            controller.height = normalHeight;
-            controller.center = yNormalCenterHeight;
+            currentSpeed = walkSpeed;
             animator.SetBool("isCrouched", false);
         }
 
         // Crouch Move Forward
         if (isCrouched && Input.GetKey(KeyCode.W))
         {
+            //currentSpeed = crouchSpeed;
             animator.SetBool("isCrouchWalking", true);
-            controller.Move(move * crouchSpeed * Time.deltaTime);
         }
-        else
+        else if (isCrouched && !Input.GetKey(KeyCode.W))
         {
             animator.SetBool("isCrouchWalking", false);
+            animator.SetBool("isCrouched", true);
         }
 
         // Crouch Move Backward
@@ -174,19 +288,21 @@ public class PlayerMovement : MonoBehaviour
         {
             animator.SetBool("isCrouchBackwards", true);
         }
-        else
+        else if (isCrouched && !Input.GetKey(KeyCode.S))
         {
             animator.SetBool("isCrouchBackwards", false);
+            animator.SetBool("isCrouched", true);
         }
-        
+
         // Crouch Walk Strafe Left
         if (isCrouched && Input.GetKey(KeyCode.A))
         {
             animator.SetBool("isCrouchLeft", true);
         }
-        else
+        else if (isCrouched && !Input.GetKey(KeyCode.A))
         {
             animator.SetBool("isCrouchLeft", false);
+            animator.SetBool("isCrouched", true);
         }
 
         // Crouch Walk Strafe Right 
@@ -194,15 +310,134 @@ public class PlayerMovement : MonoBehaviour
         {
             animator.SetBool("isCrouchRight", true);
         }
-        else
+        else if (isCrouched && !Input.GetKey(KeyCode.D))
         {
             animator.SetBool("isCrouchRight", false);
+            animator.SetBool("isCrouched", true);
         }
 
-        // Velocity on the y axis is increased with gravity every frame per second 
-        velocity.y += gravity * Time.deltaTime;
+        // Camera Move when Sliding 
+        if (isSilding)
+        {
+            cameraHolder.localPosition = new Vector3(0.4f, 0.5f, 0.825f);
+        }
+        else if (!isSilding)
+        {
+            cameraHolder.localPosition = new Vector3(0, 1.8f, 0.5f);
+        }
 
-        // Player is moving down per frame 
-        controller.Move(velocity * Time.deltaTime);
+        // Camera Move when Crouched
+        if (isCrouched)
+        {
+            cameraHolder.localPosition = new Vector3(0.25f, 1.2f, 0.5f);
+        }
+
+        // Stamina 
+        if (isRunning)
+        {
+            staminaSlider.SetActive(true);
+            UseStamina(negativeStamina);
+            if (staminaBar.value < 50)
+            {
+                staminaFlash.color = ChangeColor();
+            }
+
+            if (staminaBar.value < 10)
+            {
+                currentSpeed = walkSpeed;
+                animator.SetBool("isRunning", false);
+                animator.SetBool("isWalking", true);
+            }
+            else if (isRunning && staminaBar.value > 15)
+            {
+                animator.SetBool("isRunning", true);
+                currentSpeed = sprintSpeed;
+            }
+        }
+        else if (!isRunning)
+        {
+            if (staminaBar.value > 75)
+            {
+                staminaSlider.SetActive(false);
+            }
+        }
+        staminaBar.value = currentStamina;
+    }
+
+    void UseStamina(float amount)
+    {
+        if (currentStamina - amount >= 0)
+        {
+            currentStamina -= amount * Time.deltaTime;
+            staminaBar.value = currentStamina;
+
+            // If we are already regenerating stamina 
+            if (regen != null)
+            {
+                StopCoroutine(regen);
+            }
+            regen = StartCoroutine(RegenerateStamina());
+        }
+    }
+
+    private IEnumerator RegenerateStamina()
+    {
+        yield return new WaitForSeconds(2);
+        while (currentStamina < maxStamina)
+        {
+            currentStamina += maxStamina / 100;
+            staminaBar.value = currentStamina;
+            staminaFlash.color = Color.white;
+            yield return regenTick;
+        }
+        regen = null;
+    }
+
+    public Color ChangeColor()
+    {
+        return Color.Lerp(a: Color.white, b: Color.red, t: Mathf.Sin(Time.time * 8));
+    }
+
+    private void FixedUpdate()
+    {
+        // Adds gravity when player is in the air so the player can come down at an increase rate
+        if (rb.velocity.y < -0.05f)
+        {
+            rb.AddForce(Physics.gravity * gravityMultiplier, ForceMode.Acceleration);
+        }
+        else
+        {
+            Physics.gravity = new Vector3(0, newGravity, 0);
+            rb.mass = 1;
+        }
+
+        rb.velocity = (transform.forward * moveForward) + (transform.right * moveSide) + (transform.up * rb.velocity.y);
+    }
+
+    private bool OnSlope()
+    {
+        if (Physics.Raycast(transform.position, Vector3.down, out slopeHit, playerHeight * 0.5f + 0.3f))
+        {
+            float angle = Vector3.Angle(Vector3.up, slopeHit.normal);
+            return angle < maxSlopeAngle && angle != 0;
+        }
+        return false;
+    }
+
+    private Vector3 GetSlopeMoveDirection()
+    {
+        return Vector3.ProjectOnPlane(moveDirection, slopeHit.normal).normalized;
+    }
+
+    private void OnTriggerEnter(Collider other)
+    {
+        if (other.tag == "Key")
+        {
+            if (Input.GetKeyDown(KeyCode.G))
+            {
+                keyCount += 1;
+                Destroy(other.gameObject);
+            }
+        }
     }
 }
