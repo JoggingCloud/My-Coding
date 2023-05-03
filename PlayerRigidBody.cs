@@ -6,27 +6,37 @@ using UnityEngine.UI;
 public class PlayerRigidBody : MonoBehaviour
 {
     Rigidbody rb;
-    public Animator animator;
     Vector3 moveDirection;
+    public Animator animator;
+
+    [Header("Reference Scripts:")]
+    public Axe axe;
+    public PlayerHealth playerHealth;
+    public PauseMenu pauseMenu;
 
     [Header("Main Camera:")]
     public GameObject mainCamera;
     public Transform cameraHolder;
+    public float cameraSpeed;
+    public Transform target;
+    public Vector3 velocity = Vector3.zero;
 
     [Header("Ground Check:")]
     public float playerHeight;
+    public Transform groundPt;
     public bool isGrounded;
     public LayerMask groundLayer;
-
 
     [Header("Movement:")]
     float moveForward;
     float moveSide;
     public float currentSpeed;
     public float walkSpeed;
+    public bool isWalking = false;
     public float sprintSpeed;
     public bool isRunning = false;
     public float backwardRunSpeed;
+    public bool isStrafing = false;
 
     [Header("Slope Handling:")]
     public float maxSlopeAngle;
@@ -34,12 +44,22 @@ public class PlayerRigidBody : MonoBehaviour
     public bool exitingSlope;
 
     [Header("Jumping:")]
-    public Transform groundPt;
     public bool jumpKeyPressed;
-    public float jumpForce = 2f;
+    public float idleJumpForce = 2f;
+    public float runJumpForce = 4f;
     public float newGravity = -9.81f;
     public float gravityMultiplier = 2f;
     public bool isJumping = false;
+
+    [Header("Idle Jump Cooldown:")]
+    public bool idleJumpReady;
+    public float idleJumpCoolDown = 1.7f;
+    public float idleJumpCoolDownCurrentTime = 0f;
+
+    [Header("Run Jump Cooldown:")]
+    public bool runJumpReady;
+    public float runJumpCoolDown = 1.5f;
+    public float runJumpCoolDownCurrentTime = 0f;
 
     [Header("Crouch Movement")]
     public float crouchYScale;
@@ -51,6 +71,11 @@ public class PlayerRigidBody : MonoBehaviour
     public float slideSpeed;
     public bool isSilding = false;
 
+    [Header("Sliding Cooldown:")]
+    public bool slideReady;
+    public float slideCoolDown = 1.2f;
+    public float slideCoolDownCurrentTime = 0f;
+
     [Header("Stamina:")]
     public GameObject staminaSlider;
     public Slider staminaBar;
@@ -59,12 +84,28 @@ public class PlayerRigidBody : MonoBehaviour
     public float negativeStamina;
     private WaitForSeconds regenTick = new WaitForSeconds(0.1f);
     private Coroutine regen;
+    public AudioSource staminaAudioSource;
 
     [Header("Stamina Flash:")]
     public Image staminaFlash;
 
+    [Header("Footstep Audio:")]
+    public bool useFootsteps = true;
+    public float baseStepSpeed = 0.5f;
+    public float crouchStepMultiplier = 1.5f;
+    public float sprintStepMultiplier = 0.6f;
+    public AudioSource footstepAudioSource = default;
+    public AudioClip[] grassClips = default;    
+    public AudioClip[] floorClips = default;
+    public AudioClip[] carpetClips = default;
+    public float footStepTimer = 0;
+    public float audioRaycast = 1;
+    private float GetCurrentOffset => isCrouched ? baseStepSpeed * crouchStepMultiplier : isRunning ? baseStepSpeed + sprintStepMultiplier : baseStepSpeed;
+
     [Header("Key Count:")]
-    public int keyCount;
+    public int greenKeyCount;
+    public int redKeyCount;
+    public int blueKeyCount;
 
     private void Start()
     {
@@ -84,10 +125,14 @@ public class PlayerRigidBody : MonoBehaviour
 
     private void Update()
     {
-        moveForward = Input.GetAxis("Vertical") * currentSpeed;
-        moveSide = Input.GetAxis("Horizontal") * currentSpeed;
-        jumpKeyPressed = Input.GetButtonDown("Jump");
+        if (playerHealth.livesRemaining != 0)
+        {
+            moveForward = Input.GetAxis("Vertical") * currentSpeed;
+            moveSide = Input.GetAxis("Horizontal") * currentSpeed;
+            jumpKeyPressed = Input.GetButtonDown("Jump");
+        }
 
+        rb.mass = 1f;
         isGrounded = Physics.CheckSphere(groundPt.position, 0.5f, groundLayer);
 
         // Upright Movement 
@@ -95,13 +140,16 @@ public class PlayerRigidBody : MonoBehaviour
         // Walking forward 
         if (Input.GetKey(KeyCode.W))
         {
-            //isWalking = true;
+            isWalking = true;
             animator.SetBool("isIdle", false);
             currentSpeed = walkSpeed;
             animator.SetBool("isWalking", true);
+            FootstepsHandler();
+            //Debug.Log(grassClips + " " + floorClips + " " + carpetClips);
         }
         else if (!Input.GetKey(KeyCode.W))
         {
+            isWalking = false;
             animator.SetBool("isWalking", false);
             animator.SetBool("isIdle", true);
         }
@@ -109,11 +157,14 @@ public class PlayerRigidBody : MonoBehaviour
         // Running forward
         if (Input.GetKey(KeyCode.W) && Input.GetKey(KeyCode.LeftShift))
         {
+            isWalking = false;
             isRunning = true;
             currentSpeed = sprintSpeed;
             animator.SetBool("isBackward", false);
             animator.SetBool("isWalking", false);
             animator.SetBool("isRunning", true);
+            FootstepsHandler();
+            //Debug.Log(grassClips + " " + floorClips + " " + carpetClips);
         }
         else if (!Input.GetKey(KeyCode.W) && !Input.GetKey(KeyCode.LeftShift))
         {
@@ -138,12 +189,16 @@ public class PlayerRigidBody : MonoBehaviour
         // Walking Backward Animation
         if (Input.GetKey(KeyCode.S))
         {
+            isWalking = true;
             animator.SetBool("isIdle", false);
             currentSpeed = walkSpeed;
             animator.SetBool("isNegative", true);
+            FootstepsHandler();
+            //Debug.Log(grassClips + " " + floorClips + " " + carpetClips);
         }
         else if (!Input.GetKey(KeyCode.S))
         {
+            isWalking = false;
             animator.SetBool("isNegative", false);
             animator.SetBool("isIdle", true);
         }
@@ -151,13 +206,18 @@ public class PlayerRigidBody : MonoBehaviour
         // Running Backward Animation 
         if (Input.GetKey(KeyCode.S) && Input.GetKey(KeyCode.LeftShift))
         {
+            isWalking = false;
+            isRunning = true;
+            animator.SetBool("isBackward", true);
             animator.SetBool("isRunning", false);
             animator.SetBool("isNegative", false);
             currentSpeed = backwardRunSpeed;
-            animator.SetBool("isBackward", true);
+            FootstepsHandler();
+            //Debug.Log(grassClips + " " + floorClips + " " + carpetClips);
         }
         else if (!Input.GetKey(KeyCode.S) && !Input.GetKey(KeyCode.LeftShift))
         {
+            isRunning = false;
             currentSpeed = walkSpeed;
             animator.SetBool("isBackward", false);
         }
@@ -178,30 +238,53 @@ public class PlayerRigidBody : MonoBehaviour
         // Right Strafe
         if (Input.GetKey(KeyCode.D))
         {
+            isWalking = false;
+            isStrafing = true;
             currentSpeed = walkSpeed;
             animator.SetBool("isRight", true);
+            FootstepsHandler();
+            //Debug.Log(grassClips + " " + floorClips + " " + carpetClips);
         }
         else if (!Input.GetKey(KeyCode.D))
         {
+            isStrafing = false;
             animator.SetBool("isRight", false);
         }
 
         // Left Strafe 
         if (Input.GetKey(KeyCode.A))
         {
+            isWalking = false;
+            isStrafing = true;
             currentSpeed = walkSpeed;
             animator.SetBool("isLeft", true);
+            FootstepsHandler();
+            //Debug.Log(grassClips + " " + floorClips + " " + carpetClips);
         }
         else if (!Input.GetKey(KeyCode.A))
         {
+            //isStrafing = false;
             animator.SetBool("isLeft", false);
         }
 
+        // When sliding is ready
+        if (slideCoolDownCurrentTime >= slideCoolDown)
+        {
+            slideReady = true;
+        }
+        else
+        {
+            slideReady = false;
+            slideCoolDownCurrentTime += Time.deltaTime;
+            slideCoolDownCurrentTime = Mathf.Clamp(slideCoolDownCurrentTime, 0f, slideCoolDown);
+        }
+
         // Sliding 
-        if (isRunning && Input.GetKey(KeyCode.C))
+        if (isRunning && isGrounded && Input.GetKey(KeyCode.C) && slideReady)
         {
             isSilding = true;
             animator.SetBool("isSliding", true);
+            slideCoolDownCurrentTime = 0f;
             rb.AddForce(transform.forward * slideSpeed, ForceMode.VelocityChange);
         }
         else
@@ -227,17 +310,31 @@ public class PlayerRigidBody : MonoBehaviour
         }
         rb.useGravity = !OnSlope();
 
-        //Makes Character Jump
-        if (isGrounded && jumpKeyPressed)
+        // When idle jump is ready 
+        if (idleJumpCoolDownCurrentTime >= idleJumpCoolDown)
+        {
+            idleJumpReady = true;
+        }
+        else
+        {
+            idleJumpReady = false;
+            idleJumpCoolDownCurrentTime += Time.deltaTime;
+            idleJumpCoolDownCurrentTime = Mathf.Clamp(idleJumpCoolDownCurrentTime, 0f, idleJumpCoolDown);
+        }
+
+        //Makes Character Jump in Idle 
+        if (isGrounded && jumpKeyPressed && !isWalking && !isRunning && !isStrafing && !isCrouched && !Input.GetKey(KeyCode.W) && idleJumpReady)
         {
             isJumping = true;
             exitingSlope = true;
-            rb.AddForce(transform.up * jumpForce * rb.mass, ForceMode.Impulse);
+            StartCoroutine(IdleJump());
             animator.SetBool("isJumped", true);
-            Debug.Log("Player is jumping");
+            idleJumpCoolDownCurrentTime = 0f;
+            Debug.Log("Player is idle jumping");
         }
         else if (isGrounded || !jumpKeyPressed)
         {
+            isJumping = false;
             animator.SetBool("isJumped", false);
         }
         else if (isRunning && jumpKeyPressed)
@@ -245,9 +342,31 @@ public class PlayerRigidBody : MonoBehaviour
             isJumping = false;
         }
 
-        if (isRunning && jumpKeyPressed)
+        IEnumerator IdleJump()
         {
+            yield return new WaitForSeconds(.25f);
+            rb.AddForce(transform.up * idleJumpForce * rb.mass, ForceMode.Impulse); 
+        }
+
+        // When idle jump is ready 
+        if (runJumpCoolDownCurrentTime >= runJumpCoolDown)
+        {
+            runJumpReady = true;
+        }
+        else
+        {
+            runJumpReady = false;
+            runJumpCoolDownCurrentTime += Time.deltaTime;
+            runJumpCoolDownCurrentTime = Mathf.Clamp(runJumpCoolDownCurrentTime, 0f, runJumpCoolDown);
+        }
+
+        // Make character run jump 
+        if (isRunning && isGrounded && jumpKeyPressed && runJumpReady)
+        {
+            rb.AddForce(transform.up * runJumpForce * rb.mass, ForceMode.Impulse);
             animator.SetBool("isJumping", true);
+            runJumpCoolDownCurrentTime = 0f;
+            Debug.Log("Player is run jumping");
         }
         else if (isRunning && !jumpKeyPressed)
         {
@@ -261,9 +380,11 @@ public class PlayerRigidBody : MonoBehaviour
             rb.AddForce(Vector3.down * 5f, ForceMode.Impulse);
             isCrouched = true;
             currentSpeed = crouchSpeed;
+            isRunning = false;
             animator.SetBool("isCrouched", true);
+            Debug.Log("Im crouched" + " " + currentSpeed);
         }
-        else if (Input.GetKeyUp(KeyCode.LeftControl))
+        else if (Input.GetKeyUp(KeyCode.LeftControl) && !Physics.Raycast(cameraHolder.transform.position, Vector3.up, 2f))
         {
             transform.localScale = new Vector3(transform.localScale.x, startYScale, transform.localScale.z);
             isCrouched = false;
@@ -271,11 +392,20 @@ public class PlayerRigidBody : MonoBehaviour
             animator.SetBool("isCrouched", false);
         }
 
+        // Crouch speed check 
+        if (isCrouched && Input.GetKey(KeyCode.W) && Input.GetKey(KeyCode.LeftShift))
+        {
+            isRunning = false;
+            Debug.Log("Im crouched" + " " + currentSpeed);
+        }
+
         // Crouch Move Forward
         if (isCrouched && Input.GetKey(KeyCode.W))
         {
-            //currentSpeed = crouchSpeed;
+            currentSpeed = crouchSpeed;
             animator.SetBool("isCrouchWalking", true);
+            FootstepsHandler();
+            //Debug.Log(grassClips + " " + floorClips + " " + carpetClips);
         }
         else if (isCrouched && !Input.GetKey(KeyCode.W))
         {
@@ -286,7 +416,10 @@ public class PlayerRigidBody : MonoBehaviour
         // Crouch Move Backward
         if (isCrouched && Input.GetKey(KeyCode.S))
         {
+            currentSpeed = crouchSpeed;
             animator.SetBool("isCrouchBackwards", true);
+            FootstepsHandler();
+            //Debug.Log(grassClips + " " + floorClips + " " + carpetClips);
         }
         else if (isCrouched && !Input.GetKey(KeyCode.S))
         {
@@ -297,7 +430,10 @@ public class PlayerRigidBody : MonoBehaviour
         // Crouch Walk Strafe Left
         if (isCrouched && Input.GetKey(KeyCode.A))
         {
+            currentSpeed = crouchSpeed;
             animator.SetBool("isCrouchLeft", true);
+            FootstepsHandler();
+            //Debug.Log(grassClips + " " + floorClips + " " + carpetClips);
         }
         else if (isCrouched && !Input.GetKey(KeyCode.A))
         {
@@ -308,7 +444,10 @@ public class PlayerRigidBody : MonoBehaviour
         // Crouch Walk Strafe Right 
         if (isCrouched && Input.GetKey(KeyCode.D))
         {
+            currentSpeed = crouchSpeed;
             animator.SetBool("isCrouchRight", true);
+            FootstepsHandler();
+            //Debug.Log(grassClips + " " + floorClips + " " + carpetClips);
         }
         else if (isCrouched && !Input.GetKey(KeyCode.D))
         {
@@ -329,7 +468,9 @@ public class PlayerRigidBody : MonoBehaviour
         // Camera Move when Crouched
         if (isCrouched)
         {
-            cameraHolder.localPosition = new Vector3(0.25f, 1.2f, 0.5f);
+            //cameraHolder.localPosition = Vector3.MoveTowards(target.localPosition, cameraHolder.localPosition, cameraSpeed * Time.deltaTime);
+            cameraHolder.localPosition = Vector3.SmoothDamp(target.localPosition, cameraHolder.localPosition, ref velocity,  cameraSpeed * Time.deltaTime);
+            //cameraHolder.localPosition = new Vector3(0.25f, 1.2f, 0.5f);
         }
 
         // Stamina 
@@ -356,12 +497,86 @@ public class PlayerRigidBody : MonoBehaviour
         }
         else if (!isRunning)
         {
-            if (staminaBar.value > 75)
+            if (staminaBar.value == 100)
             {
                 staminaSlider.SetActive(false);
             }
         }
         staminaBar.value = currentStamina;
+
+        if (staminaBar.value < 50 && !staminaAudioSource.isPlaying)
+        {
+            staminaAudioSource.Play();
+            Debug.Log(staminaAudioSource.isPlaying);
+        }
+        else if (staminaBar.value > 50)
+        {
+            staminaAudioSource.Stop();
+        }
+        if (pauseMenu.GameIsPaused)
+        {
+            staminaAudioSource.Stop();
+        }
+
+        // Player Attacking
+        axe.timer += Time.deltaTime;
+        if (Input.GetButtonDown("Fire1") && axe.isHolding && axe.timer >= axe.nextTimeToAttack)
+        {
+            if (pauseMenu.GameIsPaused)
+            {
+                return;
+            }
+            axe.timer = 0f;
+            Debug.Log("Im Clicking to attack");
+            animator.SetBool("isAttacking", true);
+            /*if (!axe.hasDealtDamage)
+            {
+                axe.missSwingAudioSource.PlayOneShot(axe.missSwingAudioClip);
+            }*/
+        }
+        else
+        {
+            animator.SetBool("isAttacking", false);
+        }
+    }
+
+    private void FootstepsHandler()
+    {
+        if (!isGrounded)
+        {
+            return;
+        }
+
+        footStepTimer -= Time.deltaTime;
+
+        if (footStepTimer <= 0)
+        {
+            if(Physics.Raycast(groundPt.transform.position, Vector3.down, out RaycastHit hit, audioRaycast))
+            {
+                switch (hit.collider.tag)
+                {
+                    case "Organic":
+                        footstepAudioSource.PlayOneShot(grassClips[Random.Range(0, grassClips.Length - 1)]);
+                        break;
+                    case "Hard floor":
+                        footstepAudioSource.PlayOneShot(floorClips[Random.Range(0, floorClips.Length - 1)]);
+                        break;
+                    case "Carpet":
+                        footstepAudioSource.PlayOneShot(carpetClips[Random.Range(0, carpetClips.Length - 1)]);
+                        break;
+                    default:
+                        footstepAudioSource.PlayOneShot(grassClips[Random.Range(0, grassClips.Length - 1)]);
+                        break;
+                }
+            }
+            footStepTimer = GetCurrentOffset;
+        }
+    }
+
+    private void OnDrawGizmos()
+    {
+        Gizmos.color = Color.green;
+        Gizmos.DrawWireSphere(transform.position, audioRaycast);
     }
 
     void UseStamina(float amount)
@@ -429,15 +644,14 @@ public class PlayerRigidBody : MonoBehaviour
         return Vector3.ProjectOnPlane(moveDirection, slopeHit.normal).normalized;
     }
 
-    private void OnTriggerEnter(Collider other)
+    public void Damage()
     {
-        if (other.tag == "Key")
-        {
-            if (Input.GetKeyDown(KeyCode.G))
-            {
-                keyCount += 1;
-                Destroy(other.gameObject);
-            }
-        }
+        axe.canDealDamage = true;
+        axe.hasDealtDamage = false;
+    }
+
+    public void NoDamage()
+    {
+        axe.canDealDamage = false;
     }
 }
